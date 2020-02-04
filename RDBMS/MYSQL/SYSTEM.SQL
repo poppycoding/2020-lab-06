@@ -15,3 +15,12 @@ fio -filename=/home/data -direct=1 -iodepth=1 -thread -rw=randrw -ioengine=psync
 select VARIABLE_VALUE into @a from performance_schema.global_status where VARIABLE_NAME = 'Innodb_buffer_pool_pages_dirty';
 select VARIABLE_VALUE into @b from performance_schema.global_status where VARIABLE_NAME = 'Innodb_buffer_pool_pages_total';
 select @a/@b;
+
+-- 重新计算索引基数
+analyze table t;
+
+-- 重建表
+alter table t engine = InnoDB;
+
+-- 重建索引+重建表
+optimize table t;

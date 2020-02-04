@@ -241,12 +241,51 @@ SELECT * FROM t WHERE id_card_crc = crc32(id_card_param) AND id_card = id_card_p
 -- 2.innodb控制刷脏页的速度决定性因素有两个,一个是脏页的比例,一个是redo log的写入速度,它会根据这个两个值,计算对比取出较大
 --  的值(百分比).然后乘io_capacity来作为刷脏页的速度.
 
--- 3.脏页"连坐"策略innodb_flush_neighbors=1,如果刷脏页的时候相邻的数据页也是脏页.就会连带着一起flush,多米诺骨牌效应，
--- 在机械硬盘时代，这种联动群刷效应可以减少随机io操作,但是如果是ssd这种iops较高的设备,性能瓶颈往往不是IOPS,所以只需要刷自
--- 己，减少sql的响应时间(mysql8+已经色湖之默认值为0,关闭连坐机制)
+-- 3.脏页"连坐"策略innodb_flush_neighbors=1,如果刷脏页的时候相邻的数据页也是脏页.就会连带着一起flush,多米诺骨牌效应,
+-- 在机械硬盘时代,这种联动群刷效应可以减少随机io操作,但是如果是ssd这种iops较高的设备,性能瓶颈往往不是IOPS,所以只需要刷自
+-- 己,减少sql的响应时间(mysql8+已经色湖之默认值为0,关闭连坐机制)
 innoDB_flush_neighbors = 0
 
 -- 4.脏页比例（不要经常接近75%）计算pages_dirty/pages_total
 select VARIABLE_VALUE into @a from performance_schema.global_status where VARIABLE_NAME = 'Innodb_buffer_pool_pages_dirty';
 select VARIABLE_VALUE into @b from performance_schema.global_status where VARIABLE_NAME = 'Innodb_buffer_pool_pages_total';
 select @a/@b;
+
+-- 5. redo log设置太小很快就满载,就会不停的flush(change buffer不停的被merge也相当于失效),这个时候就表现出磁盘压力小,
+--  但是数据库间歇性的性能下跌
+
+
+
+------------------------------------- 空间回收 -------------------------------------
+-- 1.表数据既可以存在共享空间,也可以是单独的文件,有参数innodb_file_per_table控制,off表示放在系统共享表空间,跟数据字典放在
+--   一起,on表示存储在单独的.ibd文件,mysql5.6+默认就是on,建议也使用on,单独的文件便于管理,而且drop表的时候,就会直接释放
+--   空间,如果是off即使删除表,也不会释放空间.
+innodb_file_per_table = on
+
+-- 2.drop删除表可以释放空间,但是删除行却不会释放空间,因为innodb的数据是按照数据页的方式存储,不管是delete一条数据,还是一个
+--   一个数据页,或者是一个表,只是标记为删除,可以复用,如果下次插入的数据,符合范围条件,就直接复用掉了；如果是一个数据页可
+--   复用,那么如果有需要申请新的数据页时,就会直接复用这个数据页；而delete整个表,就是把所有数据页标记为可复用,磁盘上文件
+--   大小并不会变小,这些可复用的空间,就相当于空白,但是仍然占有空间；同时插入/更新数据,如果造成数据页的分裂也可能造成空洞
+--   所以,经过大量增删改的数据表,会存在大量的空洞,要想整理收缩这些空间,可以通过重建表来到目的.
+
+-- 3.重建表：alter命令5.5之前时加锁的通过在server端创建当前表的临时表table,然后自动完成数据的转存,表名更换,删除旧表(t-tmp-t)
+--   但是整个过程禁止数据的更新,否则数据丢失,所在这个DDL不是online的,而5.6+之后引入了Online DDL,与上面的区别是整个过
+--   过程是在innodb内部完成的,同时创建临时文件file,而生成临时文件的过程中的更新操作会记录到日志row log；临时文件生成后在
+--   把log更新进入,这个DDL过程可以认为是Online的.(虽然DDL之前都获取MDL锁(先是写锁,为了实现online自动退化为读锁,不释
+--   放锁的原因是防止其他线程做ddl),对于一个大表来说,整个ddl过程中最耗时的就是数据copy的过程,但是这个过程有了row log是
+--   可以接受增删改操作的,所以锁的时间会很短,整个过程可以认为是Online的)
+alter table t engine = InnoDB
+
+-- 4.对于很大的表来说,还是会占用IO和CPU资源,如果是线上服务,建议使用github的开源工具处理：gh-ost
+
+-- 5.inplace DDL:online DDL操作的时候是在innodb内部创建临时文件,不5.5之前那样需要在server端创建创建临时表,这种在innodb的
+--  online操作就是inplace DDL操作,但是inplace DDL并不一定是online的,例如添加全文索引,这个时候仍然是加锁,阻塞写操作
+--  看起来就不是online了
+alter table t add fulltext(email);
+
+-- 6.1 相当于online的重建表recreate(5.6+)
+alter table t engine = InnoDB;
+-- 6.2 不是重建表,只是对索引信息重新统计(MDL锁)
+analyze table t;
+-- 6.3  相当于recreate + analyze
+optimize table t;
