@@ -24,3 +24,17 @@ alter table t engine = InnoDB;
 
 -- 重建索引+重建表
 optimize table t;
+
+-- 查看数据库表的概况,其中rows并不是确切行数
+show table status;
+
+-- 修改排序rowid算法的的因子
+show variables like 'max_length_for_sort_data';
+show variables like 'sort_buffer_size';
+show variables like 'tmp_table_size';
+-- 设置当前连接的大小
+set max_length_for_sort_data = 2048;
+set sort_buffer_size = 2097152;
+-- 设置全局大小
+set global max_length_for_sort_data = 2048;
+set global sort_buffer_size = 2097152;
