@@ -17,6 +17,10 @@ sync_binlog = 1
 -- 2.consistent read view:一致性视图,是多版本并发控制(MVCC)用得到一致性视图,用于实现读提交read-committed,
 -- 可重复读repeatable-read的两种隔离级别.
 
+
+
+
+
 ------------------------------------- TRANSACTION -------------------------------------
 -- 读未提交(read uncommitted):
 -- 读提交(read committed): 每个sql开始执行时创建视图(多个事务共享数据??)
@@ -115,6 +119,30 @@ innodb_change_buffer_max_size = 50
 --       而增加了维护buffer的代价,这种业务场景下就不适用了,应该关闭change buffer机制.
 
 
+-- 对索引字段做函数操作,会破坏索引值的有序性,因此优化器就决定放弃走树搜索功能(但是仍然选则小的索引树去遍历,不是根据B+树定位)
+-- 1.显式的函数(month):直接加在索引字段上,破坏索引值,全表扫描
+select count(*) from tradelog where month(t_modified)=7;
+
+-- 2.隐式的类型转换:`tradeid` varchar(32),搜索的值是int类型
+--  mysql比较字符串和数字的时候,默认是字符串转数字,结果是3 > 1返回true:1
+select "3" > 1;
+select * from tradelog where tradeid = 110717;
+select * from tradelog where  CAST(tradid AS signed int) = 110717;
+-- 优化:选择对应的的索引类型
+select * from tradelog where tradeid = '110717';
+
+-- 3.隐式的字符编码转换,小(utf8)转大(utf8mb4),导致CONVERT函数,驱动表l,被驱动表d
+select d.* from tradelog l, trade_detail d where d.tradeid=l.tradeid and l.id=2;
+-- 等价于被驱动表的操作
+select * from trade_detail where tradeid=$L2.tradeid.value;
+-- tradelog的字符集是mb4
+select * from trade_detail  where CONVERT(traideid USING utf8mb4)=$L2.tradeid.value;
+-- 3.1 优化1(sql层面)
+select d.* from tradelog l, trade_detail d where d.tradeid=CONVERT(l.tradeid USING utf8) and l.id=2;
+-- 3.2 优化2(DDL层面)
+alter table trade_detail modify tradeid varchar(32) CHARACTER SET utf8mb4 default null;
+
+
 
 
 
@@ -207,6 +235,9 @@ analyze table t1;
 SELECT * FROM t WHERE id_card_crc = crc32(id_card_param) AND id_card = id_card_param
 
 
+
+
+
 ------------------------------------- WAL -------------------------------------
 -- wal: write ahead log是在将元数据的变更操作写入到持久稳定的db之前;先预先写入到一个log中,然后再由另外的操作将log apply
 --   到外部的持久db里去.这种模式相当于批量操作磁盘,将磁盘随机访问改为顺序写,性能大大提高.
@@ -218,6 +249,8 @@ SELECT * FROM t WHERE id_card_crc = crc32(id_card_param) AND id_card = id_card_p
 
 -- 2.2因为随机读写的话,每次IO操作的寻址时间和旋转延时都不能忽略不计,而这两个时间的存在也就限制了IOPS的大小,而顺序读写相当于批量
 --   操作,只需要一次寻址几乎不用换道,可以忽略不计寻址时间和旋转延时,性能主要花费在数据传输的时间上.
+
+
 
 
 
@@ -256,7 +289,9 @@ select @a/@b;
 
 
 
-------------------------------------- 空间回收 -------------------------------------
+
+
+------------------------------------- SPACE -------------------------------------
 -- 1.表数据既可以存在共享空间,也可以是单独的文件,有参数innodb_file_per_table控制,off表示放在系统共享表空间,跟数据字典放在
 --   一起,on表示存储在单独的.ibd文件,mysql5.6+默认就是on,建议也使用on,单独的文件便于管理,而且drop表的时候,就会直接释放
 --   空间,如果是off即使删除表,也不会释放空间.
@@ -293,6 +328,10 @@ analyze table t;
 -- 6.3  相当于recreate + analyze
 optimize table t;
 
+
+
+
+
 ------------------------------------- COUNT(?) -------------------------------------
 -- innodb中对count(*)取行数做了专门的优化,按照效率来讲count(*)>count(1)>count(id)>count(filed),因此建议count(*)
 
@@ -322,6 +361,9 @@ show table status;
 -- 图解决,本质上使用count(*)计数的原因就是因为事务的存在导致行数不确定,所以需要时时查询可见行数,同样可以利用事务的可见性来完
 -- 成计数问题,保证其他线程看到的行数,与实际查询的数据一致.(同时记录行数的的逻辑,应该先插入数据,再更新行数,因为更新行数,会竞争
 -- 并发写锁,插入不涉及,因此把竞争的锁的时间放到后面操作,整体提高执行效率)
+
+
+
 
 
 ------------------------------------- ORDER BY -------------------------------------

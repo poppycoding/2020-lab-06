@@ -148,3 +148,77 @@ set @Y3 = floor(@C * rand());
 select * from t limit @Y1，1;
 select * from t limit @Y2，1；
 select * from t limit @Y3，1；
+
+
+
+---------------------------------------- 4.测试函数破坏索引 ----------------------------------------
+
+CREATE TABLE `tradelog` (
+`id` int(11) NOT NULL,
+`tradeid` varchar(32) DEFAULT NULL,
+`operator` int(11) DEFAULT NULL,
+`t_modified` datetime DEFAULT NULL,
+PRIMARY KEY (`id`),
+KEY `tradeid` (`tradeid`),
+KEY `t_modified` (`t_modified`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+
+CREATE TABLE `trade_detail` (
+`id` int(11) NOT NULL,
+`tradeid` varchar(32) DEFAULT NULL,
+`trade_step` int(11) DEFAULT NULL,
+`step_info` varchar(32) DEFAULT NULL,
+PRIMARY KEY (`id`),
+KEY `tradeid` (`tradeid`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+insert into tradelog values(1, 'aaaaaaaa', 1000, now());
+insert into tradelog values(2, 'aaaaaaab', 1000, now());
+insert into tradelog values(3, 'aaaaaaac', 1000, now());
+insert into tradelog values(4, 'aaaaaaae', 1000, '2020-07-01');
+
+insert into trade_detail values(1, 'aaaaaaaa', 1, 'add');
+insert into trade_detail values(2, 'aaaaaaaa', 2, 'update');
+insert into trade_detail values(3, 'aaaaaaaa', 3, 'commit');
+insert into trade_detail values(4, 'aaaaaaab', 1, 'add');
+insert into trade_detail values(5, 'aaaaaaab', 2, 'update');
+insert into trade_detail values(6, 'aaaaaaab', 3, 'update again');
+insert into trade_detail values(7, 'aaaaaaab', 4, 'commit');
+insert into trade_detail values(8, 'aaaaaaac', 1, 'add');
+insert into trade_detail values(9, 'aaaaaaac', 2, 'update');
+insert into trade_detail values(10, 'aaaaaaac', 3, 'update again');
+insert into trade_detail values(11, 'aaaaaaac', 4, 'commit');
+
+-- 1.month函数(查找16,17,18年七月份的数量)
+explain select count(*) from tradelog where month(t_modified) = 7;
+-- 1.1优化,选择索引
+select count(*) from tradelog where
+(t_modified >= '2016-7-1' and t_modified<'2016-8-1')
+or
+(t_modified >= '2017-7-1' and t_modified<'2017-8-1')
+or
+(t_modified >= '2018-7-1' and t_modified<'2018-8-1');
+
+-- 测试mysql字符串与数字比较时,是将字符串转换成数字: 结果是 3 > 1返回true:1
+select "3" > 1;
+-- 2.隐式类型转换varchar,导致CAST函数
+explain select * from tradelog where tradeid = 110717;
+select * from tradelog where  CAST(tradid AS signed int) = 110717;
+-- 2.1优化
+explain select * from tradelog where tradeid = '110717';
+
+
+-- 3.隐式编码转换,小(utf8)转大(utf8mb4),导致CONVERT函数
+explain select d.* from tradelog l, trade_detail d where d.tradeid=l.tradeid and l.id=2;
+select * from trade_detail where tradeid=$L2.tradeid.value;
+select * from trade_detail  where CONVERT(traideid USING utf8mb4)=$L2.tradeid.value;
+-- 3.1 优化1(sql)
+select d.* from tradelog l, trade_detail d where d.tradeid=CONVERT(l.tradeid USING utf8) and l.id=2;
+-- 3.2 优化2(DDL)
+alter table trade_detail modify tradeid varchar(32) CHARACTER SET utf8mb4 default null;
+
+-- 4.索引字段没有隐式转换
+select l.operator from tradelog l , trade_detail d where d.tradeid=l.tradeid and d.id=4;
+select operator from tradelog  where traideid =$R4.tradeid.value;
+select operator from tradelog  where traideid =CONVERT($R4.tradeid.value USING utf8mb4);
