@@ -154,13 +154,14 @@ flush tables with read lock
 -- 2.mysqldump使用参数single-transaction可以开启一致性事务,等同于可重复读的事务隔离级别,使用的是一致性视图,不影响
 --   其他数据更新,但是要求是全库的所有表都要支持这个事务的隔离级别,比如MyISAM就不支持事务,因此不能使用.
 
---3.设置readonly参数可以让全库进入制度状态,但是缺点是当客户端出现异常是,数据库仍然保持readonly状态,而flwrl能自动释放全局锁
+--3.设置readonly参数可以让全库进入只读状态,但是缺点是当客户端出现异常是,数据库仍然保持readonly状态,而flwrl能自动释放全局锁
 set global readonly = true
 
 ----------- 表级别锁:
 -- 1.表锁,使用lock tables .. read/write语法实现,使用unlock tables解锁;如下,作用是限制其他线程写1,读写2,但是当前线程
 --   也只能读1,读写2,不允许访问其他表,在没有出现行级锁之前,这种控制并发访问的粒度较大,影响面较广.
-lock tables t1 read, t2 write
+lock tables t1 read, t2 write;
+unlock tables;
 
 -- 2.另外一种是MDL(meta data lock)不需要显示使用,mysql5.5+引入,在访问一个表的时候会自动加上对应的读锁,写锁;避免当一个
 --   线程读取数据时,另外一个线程修改了表结构,这样读取的数据就会与表结构不对应.读锁之间不互斥,读写锁以及写锁之间互斥,因此当执行
@@ -438,6 +439,63 @@ explain select word from words order by rand() limit 3;
 show variables like 'tmp_table_size';
 -- 5.2 涉及内存表的排序,mysql就不会选择全字段排序,因为全字段排序的目的就是减少回表操作,减少磁盘的访问,但是内存表都是内存操作
 -- 所以涉及排序优先选择rowid排序,然后会内存中回表.
+
+
+
+
+
+----------------------------------- PERFORMANCE -------------------------------------
+-- 查一行数据慢的原因:表锁,行锁,一致性读问题造成
+-- 1.遇到mdl锁,查询阻塞问题:A加了mdl锁,B去查询,就会等待A
+-- a加锁
+lock table t write;
+-- b查询,堵塞
+select * from t where id = 1;
+-- 查看原因:Waiting for table metadata lock
+-- 有一个线程是sleep,理论上就是那个锁线程,但是信息不够准确,可以通过下述的blocking_pid命令确定确切的阻塞pid
+show processlist;
+-- 通过sys.performance_schema,查看具体锁进程id信息,performance_schema=on(10%左右性能损失),然后kill锁进程即可
+select blocking_pid from schema_table_lock_waits;
+kill 32;
+-- performance_schema=on而且ENABLED='YES',TIMED='YES',才可以查看到上述的blocking_pid
+show variables like 'performance_schema';
+select * from performance_schema.setup_instruments where name='wait/lock/metadata/sql/mdl';
+update performance_schema.setup_instruments set ENABLED='YES',TIMED='YES' where name='wait/lock/metadata/sql/mdl';
+
+-- 2.等flush,mysql对表flush的时候会暂时关闭锁,但是一般速度很快,但是当flush的过程被阻塞的时候,flush就会进而阻塞其他线程查询
+-- flush命令可以控制所有或者指定的表,执行的时候会添加read lock.
+flush tables;
+flush tables t;
+-- 当一个线程sleep时,一个线程flush的时候阻塞,这个时候如果还有一个线程查询就会被阻塞直到flush结束.
+select sleep(1000);
+flush tables t;
+select * from t where id =1;
+-- 通过show processlist查看flush情况,根据id进行kill掉阻塞flush的进程,或者kill掉flush的进程??
+show processlist;
+kill id;
+
+
+-- 3.行锁等待,一个线程开启写锁,这个时候读取的时候加读锁,就会被写锁阻塞
+begin; update t set c = c + 1 where id = 1;
+-- 读取阻塞直到上一个commit
+select * from t where id = 1 lock in share mode;
+-- processlist看出阻塞,然后利用innodb_lock_waits查出pid杀死
+show processlist;
+select * from sys.innodb_lock_waits where locked_table = '`test`.`t`'\G;
+-- kill id,不是kill query是停止当前执行的语句,但是update语句已经执行完,kill query无法释放锁
+kill id;
+
+
+-- 4.还有一种查询慢的情况,就是开启一致性读的时候,另一个线程更新数据多次,这个时候一致性读就要利用undo log一次次计算到更新前的值
+-- a:
+start TRANSACTION  WITH consitent snapshot;
+-- b:更新100w次
+update t set c=c+1 where id = 1;
+-- a:查询
+-- 因为是一致性读,需要把上面的100w次更新利用undo log依次回滚计算出未更新的值,所以查询慢
+select * from t where id = 1;
+-- 因为是当前读,直接读出最后的更新值.
+select * from t where id = 1 lock in share mode;
 
 
 

@@ -22,7 +22,9 @@ CREATE TABLE `t1` (
   KEY `b` (`b`)
 ) ENGINE=InnoDB;
 
-/* 存储过程初始化数据 */
+/* 存储过程初始化数据,临时设置0(全局需要重新连接mysql),执行完复原1 */
+set global innodb_flush_log_at_trx_commit=0;
+set global sync_binlog=0;
 delimiter ;;
 create procedure idata()
 begin
@@ -35,6 +37,8 @@ begin
 end;;
 delimiter ;
 call idata();
+set global innodb_flush_log_at_trx_commit=1;
+set global sync_binlog=1;
 
 /* 测试索引选择 */
 explain select * from t1 where a between 10000 and 20000;
@@ -222,3 +226,61 @@ alter table trade_detail modify tradeid varchar(32) CHARACTER SET utf8mb4 defaul
 select l.operator from tradelog l , trade_detail d where d.tradeid=l.tradeid and d.id=4;
 select operator from tradelog  where traideid =$R4.tradeid.value;
 select operator from tradelog  where traideid =CONVERT($R4.tradeid.value USING utf8mb4);
+
+
+
+---------------------------------------- 5.测试查询一行语句,性能问题 ----------------------------------------
+-- 1.A加了mdl锁,B去查询,就会等待A
+-- a加锁
+lock table t write;
+-- b查询,堵塞
+select * from t where id = 1;
+-- 查看原因:Waiting for table metadata lock
+show processlist;
+-- 通过sys.performance_schema,查看具体锁进程id信息,performance_schema=on(10%左右性能损失),然后kill锁进程即可
+select blocking_pid from schema_table_lock_waits;
+kill 32;
+-- performance_schema=on而且ENABLED='YES',TIMED='YES',才可以查看到上述的blocking_pid
+show variables like 'performance_schema';
+select * from performance_schema.setup_instruments where name='wait/lock/metadata/sql/mdl';
+update performance_schema.setup_instruments set ENABLED='YES',TIMED='YES' where name='wait/lock/metadata/sql/mdl';
+
+-- 2.flush被阻塞,进而阻塞select(三个线程)
+select sleep(10000);
+flush tables t;
+select * from t where id =1;
+-- 查询kill
+show processlist;
+kill id;
+
+-- 3.读写行锁等待
+begin; update t set c = c + 1 where id = 1;
+-- 读取阻塞直到上一个commit
+select * from t where id = 1 lock in share mode;
+-- processlist看出阻塞,然后利用innodb_lock_waits查出pid杀死
+show processlist;
+select * from sys.innodb_lock_waits where locked_table = '`test`.`t`'\G;
+-- kill id,不是kill query是停止当前执行的语句,但是update语句已经执行完,kill query无法释放锁
+kill id;
+
+
+-- 4.查询慢(线上超过1s的算是慢查询)
+CREATE TABLE `t4` (
+  `id` int(11) NOT NULL,
+  `c` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB;
+
+delimiter ;;
+create procedure idata4()
+begin
+  declare i int;
+  set i=1;
+  while(i<=100000) do
+    insert into t4 values(i,i);
+    set i=i+1;
+  end while;
+end;;
+delimiter ;
+
+call idata4();

@@ -20,9 +20,9 @@ SELECT MONTH('2018-08-01')
 /* convert-转换成mb4 */
 CONVERT("TEST" USING UTF8MB4);
 
+/* sleep(2)-睡眠2秒 */
+SELECT sleep(2);
 
-/*  */
-/*  */
 /*  */
 /*  */
 
