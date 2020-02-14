@@ -146,7 +146,7 @@ alter table trade_detail modify tradeid varchar(32) CHARACTER SET utf8mb4 defaul
 
 
 
--------------------------------------LOCK -------------------------------------
+------------------------------------- LOCK -------------------------------------
 ----------- 库级别锁:
 -- 1.mysql提供了一种全局读锁(FLWRL),让整个数据库处于只读状态(不能有其他更新等操作),典型应用场景就是做全库的逻辑备份.
 flush tables with read lock
@@ -234,6 +234,127 @@ analyze table t1;
 -- 4.crc32(id_card)-添加hash字段,利用hash函数值(长度短)作为索引,因为有hash碰撞,所以查询条件还是需要id_card值的校验
 --   缺点:和倒叙存储一样,不支持范围扫描,同时额外调用数据库函数有性能消耗.
 SELECT * FROM t WHERE id_card_crc = crc32(id_card_param) AND id_card = id_card_param
+
+
+
+
+
+------------------------------------- Gap Lock -------------------------------------
+-- 幻读:指一个事务在前后两次查询同一个范围的时候,后一次查询看到了前一次查询没有看到的行.
+--  1.在可重复读隔离级别下,普通的查询时快照读,是不会看到别的事务插入的数据,因此幻读是在当前读下才会出现,eg: for update
+begin; select * from t where d=5 for update; commit;
+--  2.幻读专指看到新插入的行,更新的行不算,eg: for update的时候,另外一个线程更新某一行了d=5,此刻就会比更新前多看到这一行,
+--  但是这个不是幻读,必须是新插入了一行,因为for update当前读,看到了插入的行才是幻读.
+
+-- 假设存在幻读,新增的数据会产生一致性问题(binlog记录的顺序问题),因为锁不到未来新增的行,最终binlog记录的顺序就会导致数据
+-- 不一致,如下:
+-- 线程a
+begin; select * from t where d=5 for update;
+-- 线程b,插入之后更新c=5,直接提交,记录binlog:1,5,5
+insert into t values(1,1,5); /*(1,1,5)*/
+update t set c=5 where id=1; /*(1,5,5)*/
+-- 线程a,提交记录binlog
+update t set d=100 where d=5;/*所有d=5的行，d改成100*/
+commit;
+
+-- 最终binlog按照提交顺序,按照如下备份恢复出来的结果id=1新增的行就不是1,5,5而是1,5,100,这就造成了数据一致性问题,而锁的设
+-- 计就是为了保证数据的一致性,不止是数据库内部数据状态一致,而且包含了数据和日志逻辑上的一致性
+insert into t values(1,1,5); /*(1,1,5)*/
+update t set c=5 where id=1; /*(1,5,5)*/
+update t set d=100 where d=5;/*所有d=5的行，d改成100*/
+
+-- GapLock: 产生幻读的原因就是行锁只能锁住行,但是新插入的的记录是在行之间的间隙,也即是两条记录之间的间隙,为了解决幻读innodb
+-- 引入了间隙锁,锁住两个纪录间的空隙比如id=1,id=4之间有个间隙可能插入2,3,4的数据,而for update的时候会加行锁,还有间隙锁,同
+-- 时间隙锁的冲突就是插入的动作,而间隙锁之间不存在冲突关系
+
+-- 间隙锁和行锁合称: next-key lock,每个next-key lock前开后闭(每一个索引都有一个不存在的最大值作为闭区间),而间隙锁是开区间.
+-- eg: t3: id,a,b三个字段
+insert into t3 values(0,0,0),(5,5,5), (10,10,10);
+-- 上面初始化3条数据,就会产生4个间隙:(负无穷,0),(0,5),(5,10),(10,正无穷),而for update的时候除了加上三个行锁还会加上
+-- 上面四个间隙锁,而三个行锁对应的id就是0,5,10,加上间隙锁的开区间结果就是(负无穷,0],(0,5],(5,10],(10,supremum]这就
+-- 是next-key lock也即是前开后闭合的锁,完全锁住了整个表的记录和间隙.(supremum:innodb为索引生成的一个不存在的最大值,因为
+-- 正无穷是开区间,而next-key lock的规则是后闭合)
+select * from t where d=5 for update;
+
+-- 间隙锁的引入虽然解决了幻读问题,但同时锁住了表更大的范围,影响了并发度,因为所有的插入都会阻塞掉,容易发生死锁eg:
+-- a,id=9不存在,会加上间隙锁
+begin; select * from t where id=9 for update;
+-- b,同样会加上间隙锁,insert等待a释放
+select * from t where id=9 for update;
+insert into t values(9,9,9);
+-- a,等待b释放间隙锁,形成死锁
+insert into t values(9,9,9);
+
+-- 间隙锁是在可重复读的隔离级别产生的,如果业务要求不需要可重复读,设置成读提交就不会有这个问题,但是读提交可能会出现数据和日志
+-- 不一致问题,需要把binlog格式设置成row,这也是使用最多的组合binlog_format=row
+
+
+
+
+
+
+------------------------------------- Lock Rule -------------------------------------
+-- 加锁规则:两个原则,两个优化,一个bug
+-- 原则1:加锁的基本单位是next-key lock,前开后合
+-- 原则2:查找过程中访问到的对象才会加锁(访问到的是索引,实际上锁就是加载索引上)
+-- 优化1:索引上的等值查询,给唯一索引加锁的时候,next-key lock退化为行锁
+-- 优化2:索引上的等值查询,向右遍历且最后一个不满足等值条件的时候,next-key lock退化为间隙锁
+-- bug:唯一索引上的范围查询会访问到不满足条件的第一个值为止
+
+-- 验证原则1和优化2
+-- a:首先加next-key lock(5,10],id=7不存在,遍历到id=10不足条件,退化成间隙锁(5,10)
+begin; update t3 set d=d+1 where id=7;
+-- b:blocked
+insert into t3 values (8,8,8);
+-- c:退化之后行锁id=10释放,这个语句不被阻塞,ok
+update t3 set d=d+1 where id=10;
+
+-- 验证原则1,2和优化2
+-- a:首先加next-key lock是(0,5],c是普通索引,继续查找下一条数据c=10,这个时候加next-key lock(5,10],然后c=10不满足
+-- 退化成间隙锁(5,10)
+begin; select id from t3 where c=5 lock in share mode;
+-- b: 这个时候b去更新id=5也即是c=5的数据,可以更新成功,因为原则2访问的对象加锁,锁是加在c索引上,而查询id直接在c索引上覆盖
+-- 查出,所以不需要访问id主键索引,也就没有加锁,id=5可以更新.(注意是in share mode不是for update,innodb认为后者就是为了
+-- 更新数据,就会给主键索引加上锁.同时也可以看出来,后续使用in share mode加读锁的时候,如果避免数据被更新的话,就必须绕过覆盖
+-- 主键索引优化,查询索引中不存在的字段,这样就会给主键加上索引,更新block)
+update t3 set d=d+1 where id=5;
+-- c: 因为间隙锁(5,10),所以block
+insert into t3 values(7,7,7);
+
+-- 验证原则2锁是加在访问的对象上,也即是索引上,上面的查询id可以update,但是查询d需要访问主键,就会加X写锁
+-- a:查询d没有覆盖索引,就需要访问主键索引,这个时候b去更新id=5就会被block
+begin; select d from t3 where c=5 lock in share mode;
+-- b;没有索引覆盖,就会访问到主键索引,访问到的对象加锁,这个时候block
+update t3 set d=d+1 where id=5;
+
+-- 验证等值查询才会优化
+-- a:首先是(5,10]等值退化成id=10的行锁,然后是范围查询,大于10的第一条是15也就是(10,15],此刻的锁是id=10和next-key
+-- lock(10,15],因为是范围查询所以锁不发生退化
+begin;select * from t3 where id>=10 and id<11 for update;
+-- b:id=8插入成功,13的插入失败
+insert into t3 values(8,8,8);
+insert into t3 values(13,13,13);
+-- c:因为是范围查询,不是等值查询,所以索引上的锁不退化,包含15这一行锁,所以block
+update t3 set d=d+1 where id=15;
+
+-- 验证bug,唯一索引范围锁,会访问到第一个不满足条件的第一行为止
+-- a:应该加上(10,15]next-key lock,并且因为是唯一索引,也就停止扫描,但是innodb实际上会多访问一个,也就是第一个不满足条件的id=20的数据,因此访问到
+-- 的都要加锁,也就是(10,15],(15,20],这应该是一个bug,官方系统有提出bug,但是尚未verified.
+begin;select * from t3 where id > 10 and id <= 15 for update;
+-- b:由于bug,id=20会被block
+update t3 set d=d+1 where id=20;
+-- c:同样(15,20]),也会block
+insert into t3 values(16,16,16);
+select * from sys.innodb_lock_waits where locked_table = '`test`.`t3`'\G;
+
+
+
+
+
+
+
+
+
 
 
 

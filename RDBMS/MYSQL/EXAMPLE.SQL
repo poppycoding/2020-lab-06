@@ -284,3 +284,104 @@ end;;
 delimiter ;
 
 call idata4();
+
+
+
+
+
+---------------------------------------- 6.加锁规则验证 ----------------------------------------
+CREATE TABLE `t3` (
+  `id` int(11) NOT NULL,
+  `c` int(11) DEFAULT NULL,
+  `d` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `c` (`c`)
+) ENGINE=InnoDB;
+insert into t3 values(0,0,0),(5,5,5), (10,10,10),(15,15,15),(20,20,20),(25,25,25);
+
+
+
+-- 验证等值查询:首先是next-key lock:(5,10],然后退化成间隙锁(5,10)
+-- a:(5,10]->退化(5,10)
+begin; update t3 set d=d+1 where id=7;
+-- b:blocked
+insert into t3 values (8,8,8);
+-- c:ok
+update t3 set d=d+1 where id=10;
+-- 查看锁信息:X(写锁,排他锁),GAP(间隙锁)
+-- (注意设置 ENABLED='YES',TIMED='YES',同时锁等待时间大一些,否则默认50s等待,自动退出锁)
+select * from sys.innodb_lock_waits where locked_table = '`test`.`t3`'\G;
+
+
+
+-- 验证索引覆盖等值索引问题
+-- a:首先是(0,5]间隙锁,c是普通索引,继续查找下一条数据c=10,这个时候加(5,10],然后退化(5,10)
+begin; select id from t3 where c=5 lock in share mode;
+-- b: 锁是加载索引上,因为查询id,直接在c索引上覆盖查出,所以id主键索引没有加锁,id=5可以更新
+update t3 set d=d+1 where id=5;
+-- c: 因为间隙锁(5,10),所以block
+insert into t3 values(7,7,7);
+-- 查看锁信息:S(读锁,共享锁),GAP(间隙锁)
+-- (注意设置 ENABLED='YES',TIMED='YES',同时锁等待时间大一些,否则默认50s等待,自动退出锁)
+select * from sys.innodb_lock_waits where locked_table = '`test`.`t3`'\G;
+
+
+
+-- 验证锁是加在索引上
+-- a:查询d没有覆盖索引,就需要访问主键索引,这个时候b去更新id=5就会被block
+begin; select d from t3 where c=5 lock in share mode;
+-- b;没有索引覆盖,就会访问到主键索引,访问到的对象加锁,这个时候block,而且是x写锁
+update t3 set d=d+1 where id=5;
+-- 查看锁信息:X(写锁,排他锁)
+-- (注意设置 ENABLED='YES',TIMED='YES',同时锁等待时间大一些,否则默认50s等待,自动退出锁)
+select * from sys.innodb_lock_waits where locked_table = '`test`.`t3`'\G;
+
+
+
+-- 验证唯一索引范围查询(不退化成间隙锁,仍然是next-key lock),等值查询才会优化
+-- a:首先是(5,10]等值退化成id=10的行锁,然后是范围查询,大于10的第一条是15也就是(10,15],此刻的锁是id=10和next-key
+-- lock(10,15],因为是范围查询所以锁不发生退化
+begin;select * from t3 where id>=10 and id<11 for update;
+-- b:id=8插入成功,13的插入失败
+insert into t3 values(8,8,8);
+insert into t3 values(13,13,13);
+-- c:因为是范围查询,不是等值查询,所以索引上的锁不退化,包含15这一行锁,所以block
+update t3 set d=d+1 where id=15;
+
+
+
+-- 验证普通索引的范围锁不退化,等值锁当不包含的时候才退化成间隙锁,当包含值且是唯一索引才退化成行锁
+-- a:首先是(5,10],然后是范围查询,大于10的第一条是15也就是(10,15],此刻的锁是(5,10]和(10,15],没有对应的优化规则
+begin;select * from t3 where c>=10 and c<11 for update;
+-- b:id=8插入失败
+insert into t3 values(9,9,9);
+-- c:因为是范围查询,不是等值查询,所以索引上的锁不退化成间隙锁,包含15这一行锁,所以block
+update t3 set d=d+1 where c=15;
+
+
+
+-- 1.delete删除最好加上limit,减少所范围,同时安全性高,明确删除条数(c=10有两行)
+insert into t3 values(30,10,30);
+-- a:索引c上锁最终(5,10],(10,15)
+begin; delete from t3 where c = 10;
+-- b:block
+insert into t3 values(12,12,12);
+-- c:ok
+update t3 set d=d+1 where c=15;
+
+-- 1.1.delete删除最好加上limit,减少所范围,同时安全性高,明确删除条数(c=10有两行)
+-- a:因为c=10一共就两行,所以扫描到的哥c=10就会停止扫描,索引c上锁最终(5,10],(10,10]也即是(5,10]
+begin; delete from t3 where c = 10 limit 2;
+-- b:ok
+insert into t3 values(12,12,12);
+
+
+
+-- 验证next-key lock是由间隙锁+行锁组成,实际执行的时候也是分成间隙锁和行锁两段来执行的
+-- a:加上next-key lock(5,10]
+begin; select * from t3 where c = 10 lock in share mode;
+-- b:然后sessionB更新也需要加上next-key lock(5,10],分成两段,先是间隙锁(5,10)这个时候与a之间的间隙锁不冲突,但是加行锁10时,就要进入锁等待block
+update t3 set d=d+1 where c= 10;
+-- a:这个时候a又要插入,本身是可以插入,虽然b没有申请到next-key lock,但是已经申请了间隙锁(5,10)阻塞a的插入,所以ab之间相互等待出现死锁
+-- ERROR 1213 (40001): Deadlock found when trying to get lock; try restarting transaction
+insert into t3 value(8,8,8);
