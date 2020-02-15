@@ -292,7 +292,6 @@ insert into t values(9,9,9);
 
 
 
-
 ------------------------------------- Lock Rule -------------------------------------
 -- 加锁规则:两个原则,两个优化,一个bug
 -- 原则1:加锁的基本单位是next-key lock,前开后合
@@ -346,15 +345,6 @@ update t3 set d=d+1 where id=20;
 -- c:同样(15,20]),也会block
 insert into t3 values(16,16,16);
 select * from sys.innodb_lock_waits where locked_table = '`test`.`t3`'\G;
-
-
-
-
-
-
-
-
-
 
 
 
@@ -617,6 +607,54 @@ update t set c=c+1 where id = 1;
 select * from t where id = 1;
 -- 因为是当前读,直接读出最后的更新值.
 select * from t where id = 1 lock in share mode;
+
+
+
+
+
+
+----------------------------------- TEMPORARY IMPROVE PERFORMANCE -------------------------------------
+-- 1 当连接数不够用时,异常too many connections,可以手动kill服务端的连接,相当于服务端wait_timeout超时自动断开连接一样
+-- a:占用连接,但是有事务存在,不能kill
+begin; insert into t3 value(9,9,9);
+-- b:事务已经提交,事务之外占有连接,这种连接相对而言比有事务的安全一点(这也是一种有损方案,临时提高性能)
+select * from t3 where id =1;
+-- 查看到两个线程都在sleep,不能确定具体事务状态,通过innodb_trx表确定
+show processlist;
+-- 查看事务内的连接id参数: trx_mysql_thread_id
+select * from information_schema.innodb_trx\G;
+
+-- 1.1 减少连接过程的消耗,通过修改权限参数,使mysql在建立连接过程中,跳过权限验证,不建议使用,危险高
+-skip-grant-tables
+
+
+
+-- 2 导致慢查询问题,通常三种可能:索引没建好,sql语句没写好,mysql选错索引
+-- 2.1 索引没建好的话,mysql5.6+已经支持online ddl,可以直接alter table添加索引.如果是主备库通常是备库关闭binlog,然后alter,然后主备切换,再
+-- 次alter,这也是紧急处理方案,更为安全的做法是使用github开源的gh-host
+set sql_log_bin=off
+
+-- 2.2 sql语句没写好,(mysql5.7+)线上紧急处理的时候使用query_rewrite(安装插件)功能,利用存储过程对于特定的语句实行替换,达到改写sql的目的eg:
+-- 这种会导致innodb全表扫描
+select * from t1 where id +1 = 10000;
+-- 这种利用主键索引,只需要扫描一行
+select * from t1 where id  = 9999;
+-- 利用query_rewrite替换,然后调用call存储过程
+insert into query_rewrite.rewrite_rules(pattern,replacement,pattern_database)
+values("select * from t1 where id + 1 = ?", "select * from t where id = ?-1","test");
+call query_rewrite.flush_rewrite_rules();
+-- show查看rewrite插件生效
+select * from t1 where id +1 = 10000;
+show warnings;
+-- 慢查询日志也可以看到实际执行
+select * from t1 where id = 10000-1;
+
+-- 2.3 mysql选错了索引导致性能问题,同样是利用rewrite插件重写sql,强制force index选择索引eg:
+select * from t force index(a) where ..
+
+-- 2.4 通常都是前两种,也就是索引没设计好,或者sql没写好导致的慢查询,通常避免这类错误的方法:
+-- 2.4.1 上线前,开启慢查询日志slow log设置long_query_time=0保证记录每一条sql语句,观察rows_examined行数是否符合预期,同时做好模拟线上数据的测
+-- 试,维护项目通常新增的sql不多,可以手动执行观察,如果是新项目,建议使用开源工具pt-query-digest检查所有的sql返回结果
 
 
 

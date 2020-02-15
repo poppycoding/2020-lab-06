@@ -385,3 +385,28 @@ update t3 set d=d+1 where c= 10;
 -- a:这个时候a又要插入,本身是可以插入,虽然b没有申请到next-key lock,但是已经申请了间隙锁(5,10)阻塞a的插入,所以ab之间相互等待出现死锁
 -- ERROR 1213 (40001): Deadlock found when trying to get lock; try restarting transaction
 insert into t3 value(8,8,8);
+
+
+
+-- 分析锁
+-- a:由于order by先加的时c=20的next-key lock (15,20],然后范围向右,退化就是(20,25),然后向左遍历到c=10不退化,也即是(5,10],(10,15]整体上c索
+-- 引上的锁范围:(5,25),又因为没有覆盖主键,回表导致主键加了三个行锁(10,15,20)
+begin;select * from t3 where c>=15 and c<=20 order by c desc lock in share mode;
+-- b:间隙锁(5,25)block
+insert into t3 value(6,6,6);
+insert into t3 value(16,16,16);
+
+-- block
+update t3 set d=d+1 where c=15;
+update t3 set d=d+1 where id=15;
+update t3 set d=d+1 where c=20;
+update t3 set d=d+1 where id=20;
+-- ok
+update t3 set d=d+1 where id=25;
+update t3 set d=d+1 where c=25;
+
+-- block(由于向左不是向右导致锁不退化) ???
+update t3 set d=d+1 where c=10;
+-- ok ???
+update t3 set d=d+1 where id=10;
+

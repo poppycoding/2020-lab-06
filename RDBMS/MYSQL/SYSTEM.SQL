@@ -84,3 +84,33 @@ select name from mysql.proc where db='test' and type='PROCEDURE';
 
 -- 删除存储过程/函数: DROP { PROCEDURE | FUNCTION } [ IF EXISTS ] <name>
 drop PROCEDURE if EXISTS my-procedure-name;
+
+-- 查看最大连接数设置
+show variables like 'max_connections';
+
+-- 查看超时断开连接
+show variables like 'wait_timeout';
+
+-- 查看事务状态,trx_mysql_thread_id表示这个连接处于事务中
+select * from information_schema.innodb_trx\G;
+
+-- 查看上一个语句的警告或者错误信息
+show warnings;
+show errors;
+
+-- 安装 Rewriter Query Rewrite Plugin:https://dev.mysql.com/doc/refman/5.7/en/rewriter-query-rewrite-plugin-installation.html
+-- To install or uninstall the Rewriter query rewrite plugin, choose the appropriate script located in the share directory of your MySQL installation
+-- 1.首先是在mysql安装目录share,执行install.sql(卸载使用unstall.sql)
+mysql -u root -p < install_rewriter.sql
+-- 2.验证是否开启on
+show global variables like 'rewriter_enabled';
+set global rewriter_enabled = on;
+set global rewriter_enabled = off;
+-- 3.执行sql的替换
+insert into query_rewrite.rewrite_rules (pattern, replacement)
+values('select ?', 'select ? + 1');
+-- 4.查看替换是否成功
+select * from query_rewrite.rewrite_rules\g
+-- 5.调用存储,使之生效,查看确认生成digest即可
+call query_rewrite.flush_rewrite_rules();
+select * from query_rewrite.rewrite_rules\g
