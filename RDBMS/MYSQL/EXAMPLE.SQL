@@ -410,3 +410,45 @@ update t3 set d=d+1 where c=10;
 -- ok ???
 update t3 set d=d+1 where id=10;
 
+
+
+
+---------------------------------------- 分析binlog ----------------------------------------
+CREATE TABLE `t2` (
+`id` int(11) NOT NULL,
+`a` int(11) DEFAULT NULL,
+`t_modified` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+PRIMARY KEY (`id`),
+KEY `a` (`a`),
+KEY `t_modified`(`t_modified`)
+) ENGINE=InnoDB;
+
+insert into t2 values(1,1,'2018-11-13'); insert into t2 values(2,2,'2018-11-12'); insert into t2 values(3,3,'2018-11-11');
+insert into t2 values(4,4,'2018-11-10'); insert into t2 values(5,5,'2018-11-09');
+
+-- statement可以直接查看binlog
+set binlog_format=statement;
+delete from t2 /*comment*/  where a>=4 and t_modified<='2018-11-10' limit 1;
+show warnings;
+show binlog events in 'server1-bin.000001';
+-- ### use `test`; delete from t2   where a>=4 and t_modified<='2018-11-10' limit 1;
+
+-- row可以直接查看需要借助mysqlbinlog工具解析binlog,根据pos也即是binlog的位置开始
+set binlog_format=row;
+delete from t2 /*comment*/  where a>=4 and t_modified<='2018-11-10' limit 1;
+show binlog events in 'server1-bin.000001';
+-- vv解析后的log主要内容: @1=4 @2=4 @3=1541779200,代表删除的那一行数据是(4,4,1541779200)
+bin/mysqlbinlog -vv data/server1-bin.000001 --start-position=1805
+-- ### DELETE FROM `test`.`t2`
+-- ### WHERE
+-- ###   @1=4 /* INT meta=0 nullable=0 is_null=0 */
+-- ###   @2=4 /* INT meta=0 nullable=1 is_null=0 */
+-- ###   @3=1541779200 /* TIMESTAMP(0) meta=0 nullable=0 is_null=0 */
+
+-- mixed是两种混合,mysql自行判断选择,但是还是有一定风险:下面这条语句,mysql选择的是statement,但是binlog中额外记录了时间戳的值,但是手动恢复的时候
+-- 如果大意,只执行binlog中的语句,而没有考虑上下文的时间戳值,就会出错
+insert into t2 values(10,10, now());
+bin/mysqlbinlog -vv data/server1-bin.000001 --start-position=2476 --stop-position=2745
+
+-- 标准恢复做法是利用mysqlbinlog工具解析执行
+bin/mysqlbinlog data/server1-bin.000001  --start-position=2476 --stop-position=2745 | mysql -h127.0.0.1 -P3306 -uroot -p1234;

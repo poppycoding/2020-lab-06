@@ -114,3 +114,22 @@ select * from query_rewrite.rewrite_rules\g
 -- 5.调用存储,使之生效,查看确认生成digest即可
 call query_rewrite.flush_rewrite_rules();
 select * from query_rewrite.rewrite_rules\g
+
+-- 开启binlog
+show variables like 'log_%';
+-- my.ini中添加log-bin代表开启binlog,也是log前缀,server-id代表唯一值(必填)
+log-bin=server1-bin
+server-id=1
+
+-- 查看binlog格式
+show variables like 'binlog_format';
+set binlog_format=statement;
+set global binlog_format=statement;
+
+-- data目录中查看生成的日志:server1-bin.000001
+show binlog events in 'server1-bin.000001';
+-- 当为row的时候,还需要解析binlog中的event,根据pos
+bin/mysqlbinlog -vv data/server1-bin.000001 --start-position=1805
+
+
+

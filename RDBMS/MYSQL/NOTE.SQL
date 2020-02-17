@@ -658,3 +658,34 @@ select * from t force index(a) where ..
 
 
 
+
+
+
+
+
+----------------------------------- BINLOG -------------------------------------
+-- binlog-format: statement, row, mixed
+-- 不同索引的结果不同
+select * from t2 /*comment*/  where a>=4 and t_modified<='2018-11-10' limit 1;
+select * from t2 /*comment*/ force index(t_modified)  where a>=4 and t_modified<='2018-11-10' limit 1;
+
+-- statement完整记录语句,容易出现主备不一致,row能精确记录语句对应的行操作,但是记录内容多,占空间较大,mixed是两者的混合,mysql会择优选取,当出现类似
+-- 上面主备两个库可能选的索引不一致,导致删除的数据不一致时,mysql认为unsafe就会选取row来存储这个binlog.(而实际上越来越多的场景都会选row,做数据恢复
+-- 比较方便,同时mixed还是存在一定风险,比如now()函数,见example)
+
+-- binlog解析查看: data目录中查看生成的日志:server1-bin.000001
+-- 1.format为statement时,直接查看
+show binlog events in 'server1-bin.000001';
+
+-- 2.当为row的时候,还需要解析binlog中的event,根据pos
+show binlog events in 'server1-bin.000001';
+bin/mysqlbinlog -vv data/server1-bin.000001 --start-position=1805;
+
+-- delete语句当为statement时,binlog记录完整的语句,但是mysql会警告,因为主从同步时,选不同的索引会导致删除不同的语句,为row则是记录删除的数据内容
+delete from t2 /*comment*/  where a>=4 and t_modified<='2018-11-10' limit 1;
+show warnings;
+
+
+
+
+
