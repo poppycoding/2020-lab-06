@@ -67,3 +67,21 @@ zadd queue current + 5 msg
 zrangebyscore queue 0 current 0 1
 zrem queue msg
 ```
+
+##### 限流
+当系统处理能力有限时,需要限制一定的请求量对系统施压;同时还有如果需要对用户行为做限制,如一分钟内不能请求5次验证码,也是需要限流
+ - 简单限流:
+  以上述的一分钟内限制操作数(action)为例,redis中的zset可以利用score来控制这个period"一分钟",本质上这是要给滑动窗口,随着时间推移,我们需要删除滑动
+  窗之外的数据,值计算这个窗口内的操作次数,同时每次操作为数据设置一个period多一点的过期时间,代表如果一个period滑动窗时间外,这条数据已经失去统计意义,
+  及时删除节省空间:每一个用户的action用户一个zset维护,操作的时候的时间作为score,value值不重要只需要保证唯一,也用时间戳保存(uuid占内存),然后每一次
+  action的时候触发清空旧数据,计算period滑动窗内的数量,判断是否大于5次即可(同一个key操作可以使用jedis等的pipeline操作提升存取效率)
+
+ ```shell script
+ zadd uidaction current current
+ zremrangebyscore uidaction 0 current-period
+ zcard uidaction
+ expire uidaction period+1
+ ``` 
+
+ - 漏斗限流
+ 
