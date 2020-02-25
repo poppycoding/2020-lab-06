@@ -95,3 +95,70 @@ cl.throttle k 15 30 60 1
    4. -1: 如果拒绝添加,需要多久重试(假如是5就代表5s之后,漏斗有新的空间,可以新增) 
    5. 2: 需要多久(这里是2s之后就会清空),漏斗会清空
  
+##### GeoHash
+redis3.2+增加了地理位置geo模块,可以实现经纬度的计算,如:定位附近的人,附近的餐馆等功能
+ - 关系型:
+ 假如使用关系型数据库维护一个坐标(id,x,y)三个属性定位一个人的位置,如果要查找这个id附近的元素,就需要遍历整个表然后计算出所有的距离排序,最后筛选;
+ 这种计算量过大,性能不满足,可以通过优化限定查找矩形区域,比如查找id附近半径r的数据,再加上复合索引(x,y),能满足并发不是很高的场景,如果用户在r范围
+ 没查找到目标,可以继续加大r的值做筛选
+ ```sql
+select id from t where x0-r < x < x0+r and y0-r < y < y0+r
+```
+   
+ - Geo:
+ 而对于高并发性能要求较高的业务,业界提供了地理位置GeoHash算法,大致上是将一个二维的坐标通过geo算法映射到一维的整数,当需要计算距离时,只需要在这个一
+ 维的线上取点即可,geo算法会把地球看成二维平面,利用算法划分切割最终编码得出数字,然后再对这个整数数字做base32编码变成字符串;redis使用52位的整数编码
+ 然后使用geo的base32得到字符串,本质上时zset数据结构,52位的编码数字放到score(浮点类型,无损储存整数),value是元素的key,这样查询时只需要通过score
+ 排序就可获取到附近的位置
+ 
+  1.add: 添加元素到指定集合,明确经纬度以及key
+```shell script
+geoadd company 116.48105 39.996794 juejin
+geoadd company 116.514203 39.905409 ireader
+geoadd company 116.489033 40.007669 meituan
+geoadd company 116.562108 39.787602 jd 116.334255 40.027400 xiaomi
+```
+  2.dist: 获取两个元素之间的距离,单位支持多种
+```shell script
+geodist company juejin ireader m
+geodist company juejin ireader km
+geodist company juejin meituan mi
+geodist company juejin jd km
+geodist company juejin xiaomi km
+geodist company juejin juejin km
+```
+  3.pos: 获取元素的经纬度位置,因为存储需要映射以及反向映射,存在一些误差,造成精度上一些损失可以接受
+```shell script
+geopos company juejin
+geopos company ireader
+geopos company juejin ireader
+```
+  4.hash:获取对应经纬度的hash值(可以通过网站填写路径参数,获取hash值对应的经纬度:http://geohash.org/{hash})
+```shell script
+geohash company ireader
+geohash company juejin
+```
+  5.radiusbymember: 查看附近的公司(包含自己),可选参数withcoord(坐标) withdist(距离) withhash(一维整数值)
+```shell script
+georadiusbymember company ireader 20 km count 5 asc
+georadiusbymember company ireader 20 km count 3 desc
+georadiusbymember company ireader 20 km withcoord count 3 asc
+georadiusbymember company ireader 20 km withdist  count 3 asc
+georadiusbymember company ireader 20 km withhash  count 3 asc
+georadiusbymember company ireader 20 km withcoord withdist withhash  count 3 asc
+```
+  6.radius: 根据经纬度查询集合内的元素
+```shell script
+georadius company 116.514202 39.905409 20 km withdist count 3 asc
+```
+  7.rem: 本质上时zset结构,可以使用rem删除元素,range遍历元素
+```shell script
+zrem company juejin
+zrange company 0 -1
+```
+
+- note:
+ redis中单个key对应的数据量不宜超过1M,因为集群环境中需要节点的数据迁移,如果key的数据过大,就会照常集群迁移出现卡顿,影响线上服务;而地图应用中,往往
+ 数据量过大,所以建议使用单独的redis实例部署,不适用集群环境
+
+   
