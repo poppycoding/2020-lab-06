@@ -1,0 +1,50 @@
+0.==================>>查询关联关系
+
+
+
+
+1.==================>>db
+# 查看db-db
+影响
+match
+ (d1 :DbInfo {contextPath:'db-oracle@192.168.226.27@1521@orcl@MZXT'}) -[:LINEAGE|:TABLE_INFO|:IMPACT*3]->(t:TableInfo),
+ (t)<-[:TABLE_INFO]-(d2:DbInfo)
+ RETURN  {center: ( {id:d1.id+"@center", name:d1.metaName, deleted:d1.isDeleted, category:'center'}) , around: collect(DISTINCT  {id: d2.id+"@around", name:d2.metaName, deleted:d2.isDeleted, category:'around'})}
+
+血缘
+match
+ (d2 :DbInfo) -[:LINEAGE|:TABLE_INFO|:IMPACT*3]->(t:TableInfo),
+ (t)<-[:TABLE_INFO]-(d1:DbInfo {contextPath:'db-oracle@192.168.226.27@1521@orcl@MZXT'})
+ RETURN  {center: ( {id:d1.id+"@center", name:d1.metaName, deleted:d1.isDeleted, category:'center'}) , around: collect(DISTINCT  {id: d2.id+"@around", name:d2.metaName, deleted:d2.isDeleted, category:'around'})}
+
+
+
+match (d1 :DbInfo {id:{0}}) -[:LINEAGE|:TABLE_INFO|:IMPACT*3]->(t:TableInfo), (t)<-[:TABLE_INFO]-(d2:DbInfo) RETURN  {center: ( {id:d1.id+"@center", name:d1.metaName, deleted:d1.isDeleted, category:'center'}) , around: collect(DISTINCT  {id: d2.id+"@around", name:d2.metaName, deleted:d2.isDeleted, category:'around'})}
+
+match (d2 :DbInfo) -[:LINEAGE|:TABLE_INFO|:IMPACT*3]->(t:TableInfo), (t)<-[:TABLE_INFO]-(d1:DbInfo {id:{0}}) RETURN  {center: ( {id:d1.id+"@center", name:d1.metaName, deleted:d1.isDeleted, category:'center'}) , around: collect(DISTINCT  {id: d2.id+"@around", name:d2.metaName, deleted:d2.isDeleted, category:'around'})}
+
+
+
+
+2.==================>>table
+MATCH p =(a)-->(b)-->(c)
+WHERE a.id = 'table-mysql@192.168.241.243@3306@sourcedata@sourcedata@test_table_2'
+MATCH
+(a) -[r1:COLUMN_INFO]- (b),(b) -[r2:FK_TABLE]- (c)
+RETURN {center: ( {id:a.id, name:a.metaName, deleted:a.isDeleted, category:'center'}) , around: collect({id: c.id, name:c.metaName, deleted:c.isDeleted, category:'around'})}
+
+MATCH p =(a)-->(b)-->(c) WHERE a.id = {0} MATCH (a) -[r1:COLUMN_INFO]- (b),(b) -[r2:FK_TABLE]- (c) RETURN {center: ( {id:a.id, name:a.metaName, deleted:a.isDeleted, category:'center'}) , around: collect({id: c.id, name:c.metaName, deleted:c.isDeleted, category:'around'})}
+
+
+
+
+
+3.==================>>view(来源table|view)
+match
+(v:ViewInfo {id:'view-mysql@192.168.241.243@3306@sourcedata@sourcedata@v_test_table'})
+-[:INPUT_TABLE|:INPUT_VIEW]- (t)
+return
+{center: ( {id:v.id, name:v.viewName, deleted:v.isDeleted, category:'center'}) , around: collect({id: t.id, name:t.metaName, deleted:t.isDeleted, category:'around'})}
+
+match (v:ViewInfo {id:{0}}) -[:INPUT_TABLE|:INPUT_VIEW]- (t) return {center: ( {id:v.id, name:v.viewName,  deleted:v.isDeleted,  category:'center'}) , around: collect({id: t.id, name:t.metaName,  deleted:t.isDeleted,  category:'around'})}
+

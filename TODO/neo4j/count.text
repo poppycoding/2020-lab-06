@@ -1,0 +1,8 @@
+
+MATCH (n:DbInfo{jobId:2}) RETURN count(n)
+
+MATCH (n:TableInfo{jobId:2}) RETURN count(n)
+
+MATCH (n:ViewInfo{jobId:2}) RETURN count(n)
+
+MATCH (n:ColumnInfo{jobId:2}) RETURN count(n)

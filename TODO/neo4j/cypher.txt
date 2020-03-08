@@ -1,0 +1,77 @@
+0.==================>>基础命令
+
+
+
+
+1.==================>>create relation
+MATCH
+(a:TableInfo),(b:ColumnInfo)
+WHERE a.id = 'table-mysql@192.168.241.243@3306@sourcedata@sourcedata@test_table_2'
+AND b.id = 'column-mysql@192.168.241.243@3306@sourcedata@sourcedata@test_table_2@test3_id'
+CREATE (a)-[r:COLUMN_INFO]->(b)
+RETURN r
+
+MATCH
+(a:TableInfo),(b:KettleInfo)
+WHERE b.id = 'kettle-24@transformation@test1@62to4'
+CREATE (a)-[r:LINEAGE]->(b)
+RETURN *
+
+CREATE (a:TableInfo {contextPath: 'table-mysql@192.168.241.243@3306@sourcedata@sourcedata@test_table_67',id:'table-mysql@192.168.241.243@3306@sourcedata@sourcedata@test_table_67'})
+MATCH
+(a:TableInfo),(b:KettleInfo)
+WHERE b.id = 'kettle-24@transformation@test1@62to4'and a.id = 'table-mysql@192.168.241.243@3306@sourcedata@sourcedata@test_table_67'
+CREATE (a)-[r:LINEAGE]->(b)
+RETURN *
+
+CREATE (a:ViewInfo {contextPath: 'view-mysql@127.0.0.1@3306@sourcedata@sourcedata@test_view_666',id:'view-mysql@127.0.0.1@3306@sourcedata@sourcedata@test_view_666'})
+MATCH
+(a:ViewInfo),(b:ViewInfo)
+WHERE b.id = 'view-mysql@192.168.241.243@3306@sourcedata@sourcedata@v_test_table'and a.id = 'view-mysql@127.0.0.1@3306@sourcedata@sourcedata@test_view_666'
+CREATE (a)-[r:INPUT_VIEW]->(b)
+RETURN *
+
+MATCH (k:KettleInfo)
+WHERE k.id = "kettle-24@transformation@/test1/7to6"
+CREATE p =(TableInfo { tableName: "测试2" })-[:LINEAGE]->(k)
+RETURN p
+
+
+
+2.==================>>delete relation
+MATCH
+(x { id: 'table-mysql@192.168.241.243@3306@sourcedata@sourcedata@test_table_2' })
+-[r:COLUMN_INFO]->
+(y {id: 'column-mysql@192.168.241.243@3306@sourcedata@sourcedata@test_table_2@test3_id'})
+DELETE r
+
+
+MATCH
+(x)
+-[r:LINEAGE]->
+(y {id: 'kettle-24@transformation@test1@62to4'})
+DELETE r
+
+
+MATCH
+(n:KettleInfo) -[r]-()
+WHERE n.contextPath  starts with 'kettle-16'
+delete n,r
+
+
+
+
+3.==================>>delete all
+MATCH (n)-[r]-() delete n,r
+match (n)-[r]-() delete r
+MATCH (n) delete n
+
+MATCH (n:DictInfo{id:'1067304048467775488'}) -[r]-() delete n ,r
+MATCH (n:{jobId:110}) -[r]-() delete n ,r
+
+
+
+
+
+4.==================>>match all
+MATCH (n:TableInfo) where n.jobId= 5 and n.id  starts with 'table' RETURN count(n)

@@ -1,0 +1,12 @@
+0.==================>>查询血缘关系
+
+
+MATCH
+p= (t: TableInfo { id: "table-mysql@192.168.241.243@3306@sourcedata@sourcedata@test_table_7" }) <-[:LINEAGE|:IMPACT*1..]-(x)
+set x._color = "#eee", x._shape="square",x._dbName=t.metaName,t._color = "#fff",t._shape="square",t._dbName=t.metaName
+return
+extract(n IN nodes(p)| n.id+'>>>'+n.metaName+'>>>'+n._color+'>>>'+n._shape+'>>>'+n._dbName+'>>>'+n.isDeleted)
+
+
+
+MATCH p= (t: TableInfo { id:{0} }) <-[:LINEAGE|:IMPACT*1..]-(x) set t._color = "#fff",t._shape="square",x._color = "#eee",t._dbName=t.metaName, x._shape="square",x._dbName=t.metaName return { data: extract(n IN nodes(p)| n.id+'>>>'+n.metaName+'>>>'+n._color+'>>>'+n._shape+'>>>'+n._dbName+'>>>'+n.isDeleted)}

@@ -1,0 +1,8 @@
+
+1.neo4j数据库,当磁盘空间不足,抛出异常,且不可恢复...必须保证磁盘空间 !
+Caused by: java.lang.RuntimeException: Error reading transaction logs, recovery not possible. To force the database to start anyway, you can specify 'unsupported.dbms.tx_log.fail_on_corrupted_log_files=false'. This will try to recover as much as possible and then truncate the corrupt part of the transaction log. Doing this means your database integrity might be compromised, please consider restoring from a consistent backup instead.
+        at org.neo4j.kernel.recovery.Recovery.throwUnableToCleanRecover(Recovery.java:150)
+        ... 14 more
+Caused by: java.lang.IllegalStateException: Weird, inUse was read in as true but the record is Property[-720012990425858049,used=false,prev=8358680908399645431,next=-72057587990101845,rel=-2522015791192023667, (blocks not loaded)]. At position LogPosition{logVersion=35, byteOffset=61181949} and entry version V3_0_10
+        at org.neo4j.kernel.impl.transaction.command.PhysicalLogCommandReaderV3_0_2.readPropertyRecord(PhysicalLogCommandReaderV3_0_2.java:592)
+        at org.neo4j.kernel.impl.transaction.command.PhysicalLogCommandReaderV3_0_2.visitPropertyCommand(PhysicalLogCommandReaderV3_0_2.java:185)

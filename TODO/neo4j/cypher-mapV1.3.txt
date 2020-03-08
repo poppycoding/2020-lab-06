@@ -1,0 +1,58 @@
+0.==================>>查询关联关系
+
+
+
+
+1.==================>>db
+# 查看db-db
+match (d:DbInfo)  return collect(d.id)
+
+match
+(d1:DbInfo) -[r:TABLE_INFO]-> (t1:TableInfo),
+(t1) <-[r2:IMPACT]-(k:KettleInfo),
+(k) <-[r3:LINEAGE]-(t2:TableInfo),
+(t2) <-[r4:TABLE_INFO]- (d2 :DbInfo)
+where k.jobName ='kettle(ft)' and d1.id <> d2.id
+return collect(distinct { dId1:d1.id, dDelete1:d1.isDeleted, dId2:d2.id, dDelete2:d2.isDeleted, tId1:t1.id, tDelete1:t1.isDeleted, tId2:t2.id, tDelete2:t2.isDeleted, kId:k.id })
+
+
+
+match (d:DbInfo) where d.jobName ={0} return collect({id:d.id, deleted:d.isDeleted})
+match
+(d1:DbInfo) -[r:TABLE_INFO]-> (t1:TableInfo),
+(t1) <-[r2:IMPACT]-(k:KettleInfo),
+(k) <-[r3:LINEAGE]-(t2:TableInfo),
+(t2) <-[r4:TABLE_INFO]- (d2 :DbInfo)
+where (k.jobName ={0} or ({0} is null)) and d1.id <> d2.id
+return
+collect(distinct { dId1:d1.id, dDelete1:d1.isDeleted, dId2:d2.id, dDelete2:d2.isDeleted, tId1:t1.id, tDelete1:t1.isDeleted, tId2:t2.id, tDelete2:t2.isDeleted, kId:k.id })
+
+match (d1:DbInfo) -[r:TABLE_INFO]-> (t1:TableInfo), (t1) <-[r2:IMPACT]-(k:KettleInfo), (k) <-[r3:LINEAGE]-(t2:TableInfo), (t2) <-[r4:TABLE_INFO]- (d2 :DbInfo) where (k.jobName ={0} or ({0} is null)) and d1.id <> d2.id return collect(distinct { dId1:d1.id, dDelete1:d1.isDeleted, dId2:d2.id, dDelete2:d2.isDeleted, tId1:t1.id, tDelete1:t1.isDeleted, tId2:t2.id, tDelete2:t2.isDeleted, kId:k.id })
+
+
+
+
+
+
+
+
+
+2.==================>>table
+
+
+match
+(t1:TableInfo) -[r1:COLUMN_INFO]- (c:ColumnInfo), (c) -[r2:FK_TABLE]- (t2:TableInfo)
+where c.jobName ='xtgl'
+return collect({source:t1.id, sourceDeleted:t1.isDeleted, target:t2.id, targetDeleted:t2.isDeleted, value:"fk"})
+
+match (t1:TableInfo) -[r1:COLUMN_INFO]- (c:ColumnInfo), (c) -[r2:FK_TABLE]- (t2:TableInfo) where c.jobName ={0} or ({0} is null) return collect({source:t1.id, sourceDeleted:t1.isDeleted, target:t2.id, targetDeleted:t2.isDeleted, value:"fk"})
+
+
+
+
+match
+(t3:TableInfo) -[r3:LINEAGE]- (k:KettleInfo), (k) -[r4:IMPACT]-  (t4:TableInfo)
+where  k.jobName = 'kettle(buquan)'
+return collect({source:t3.id, sourceDeleted:t3.isDeleted, target:t4.id, targetDeleted:t4.isDeleted ,value:"etl"})
+
+match (t3:TableInfo) -[r3:LINEAGE]- (k:KettleInfo), (k) -[r4:IMPACT]- (t4:TableInfo) where  k.jobName ={0} or ({0} is null) return collect({source:t3.id, sourceDeleted:t3.isDeleted, target:t4.id, targetDeleted:t4.isDeleted ,value:"etl"})
